@@ -2,7 +2,13 @@
 
 Brain-style long-term memory for AI. It decides what is worth keeping, files experiences as episodes, recalls
 by meaning and association, updates beliefs when facts change, distils repeated experience into knowledge
-while it sleeps, and forgets what is no longer used. Design: [DESIGN.md](DESIGN.md).
+while it sleeps, forgets what is no longer used, and learns from experience without retraining the model.
+Runs offline in ~40-130 MB of RAM. Design: [DESIGN.md](DESIGN.md).
+
+> **Status: experimental research code.** Main result so far: with a real local LLM (qwen2.5-coder 7B) writing
+> code against an unfamiliar SDK that changes halfway through, neuromem's reflex agent keeps **49%** first-try
+> success after the change, while a plain retrieval memory drops to **8%** (3 task orders, 48 tasks each).
+> Before the change the two are equal. See [Evidence](#evidence).
 
 ```python
 from neuromem import Brain
@@ -30,6 +36,8 @@ b.sleep()                                      # consolidate weak episodes into 
 | Sleep | clusters of weak, similar episodes become one semantic fact (an LLM summary with `--mind claude`) |
 | Forgetting | under a byte budget, the weakest, least important, superseded or consolidated memories go first |
 | Learning | `experience()` + `advise()`: learns which actions work for which kinds of task, adapts when that changes |
+| Reflexes | verified error -> fix pairs; repeated fixes become habits applied automatically; `feedback()` retires memories that mislead |
+| Vocabulary | trainable word vectors teach the small embedding models your team's jargon ("OOMKilled") |
 | Small RAM | `profile="tiny"` runs in ~100 MB total; int8 vectors; ~0.2-0.6 KB of RAM per memory |
 
 ### Learning from experience
@@ -42,7 +50,31 @@ b.advise("search ran out of memory")      # try: increase the memory limit
 b.prepare("search ran out of memory")     # short briefing to put in an LLM prompt
 ```
 
+### Examples, reflexes and feedback (for agents)
+
+```python
+b.remember_example("sum a user's order totals", working_code)         # verified worked example
+b.examples("total spent by a customer")                                 # [(id, task, code)], best first
+b.remember_fix(error_message, ["acmekit.init(app='x')"])               # lines that fixed this kind of error
+b.fixes_for(new_error)                                                  # remembered fixes for similar errors
+b.habits()                                                              # fixes that worked repeatedly
+b.feedback([memory_id], -1)                                             # it misled: weaken, then retire
+```
+
+### Teaching it your jargon
+
+```python
+from neuromem.embed import make_embedder
+from neuromem.vocab import train_vocab
+train_vocab(make_embedder("small"), {"OOMKilled": "killed for running out of memory"},
+            [("billing pods got OOMKilled", "search ran out of memory and was killed")], "vocab.json")
+b = Brain("brain.db", profile="small", vocab="vocab.json")
+```
+
 ## Install and use
+
+Python 3.10+. `profile="auto"` uses the best installed model: `full` (needs the `full` extra, ~280 MB RAM),
+otherwise `small` or `tiny` (model2vec, numpy only). Models download once from Hugging Face, then work offline.
 
 ```
 pip install -e ".[claude,dev]"          # add ,full for the bge-small transformer profile
@@ -51,6 +83,8 @@ neuromem recall "how does Priya like reviews"
 neuromem about priya
 neuromem experience "disk full on the db host" "free up disk space" 1
 neuromem advise "the volume is out of space"
+neuromem train-vocab glossary.json --pairs pairs.json --out vocab.json
+neuromem --vocab vocab.json recall "pods got OOMKilled"
 neuromem sleep
 neuromem stats
 ```
@@ -120,7 +154,8 @@ fragments worse than explicit storage and needs more RAM at these sizes:
 Explicit sparse codes cost ~100 bytes per memory, so a fixed weight matrix only saves RAM beyond several
 thousand memories, and its capacity runs out before that. Kept as an experiment; the Brain does not use it.
 
-**Real model** (`python realtest/harness.py`): a local LLM (qwen2.5-coder 7B via Ollama) writes code for 48 tasks
+**Real model** (`python realtest/harness.py retrieval reflex --seed 1`, needs [Ollama](https://ollama.com) with
+`qwen2.5-coder:7b`): a local LLM (qwen2.5-coder 7B via Ollama) writes code for 48 tasks
 against `acmekit`, a fictional SDK with hidden quirks (init first, lowercase emails, integer cents, pagination,
 timezones, retries, a Result wrapper); code is run against tests. Halfway through, the SDK moves to v2 and
 `init()` changes. First-try success, 3 task orders (seeds 0-2):
@@ -145,7 +180,16 @@ replaying outdated examples. Habits only form for whole-statement fixes (e.g. an
   form "X is N" vs "X is M". Real text needs `ClaudeMind`, which has only been tested with a fake client.
 - Heuristic entities are capitalised words; lowercase subjects ("payments") are not entities.
 - One process at a time; recall scans all memories (fine to ~10^5).
-- Jargon the embedding model doesn't know matches poorly: "pods OOMKilled" vs "ran out of memory" scores near
-  zero on every profile; plain descriptions work.
-- Learning results come from a simulated incident stream, not a real agent.
+- Jargon the embedding model doesn't know matches poorly unless you train a vocabulary for it.
+- The real-model test uses one fictional SDK and one 7B model; results vary a lot between task orders.
+- Reflex habits only learn whole-statement fixes, not edits inside a line.
 - No real long-term usage data yet.
+
+## Related work
+
+Most of these ideas exist elsewhere: memory for LLM agents with fact extraction and conflict resolution
+(mem0), temporal knowledge graphs that invalidate old facts (Zep / Graphiti), tiered working + archival memory
+(Letta / MemGPT), episodic / semantic / procedural memory types (LangMem), recency x importance x relevance
+recall with reflection (Generative Agents), forgetting curves (MemoryBank), hippocampus-inspired multi-hop
+retrieval (HippoRAG), and sparse random codes (FlyHash). neuromem combines them in one small offline package
+and measures each mechanism against simple baselines; it has not been compared head-to-head with those systems.
