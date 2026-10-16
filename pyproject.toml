@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "neuromem"
+version = "0.1.0"
+description = "Brain-style long-term memory for AI: attention, episodes, facts, associations, belief updates, sleep and forgetting."
+requires-python = ">=3.10"
+dependencies = ["numpy", "model2vec", "mcp<2"]
+
+[project.optional-dependencies]
+claude = ["anthropic"]
+full = ["fastembed"]
+dev = ["pytest"]
+
+[project.scripts]
+neuromem = "neuromem.cli:main"
+neuromem-mcp = "neuromem.mcp_server:main"
+
+[tool.setuptools]
+packages = ["neuromem"]
