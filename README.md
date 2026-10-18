@@ -166,7 +166,7 @@ timezones, retries, a Result wrapper); code is run against tests. Halfway throug
 | retrieval memory + worked examples | 46% | 8% | 27% | 60% |
 | neuromem reflex agent v1 (habits + verified-fix hints) | 44% | 49% | 47% | 62% |
 | + learned in-line rewrite rules | | | 45% | 66% |
-| **+ learning from partial progress (default)** | 53% | 44% | **50%** | **72%** |
+| **+ learning from partial progress (default)** | 56% | 44% | **50%** | **72%** |
 | + fixes must be seen twice before they are trusted | 53% | 35% | 44% | 70% |
 
 The reflex agent (`realtest/reflex.py`) stores verified error -> fix pairs and learned rewrite rules
