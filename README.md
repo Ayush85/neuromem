@@ -160,19 +160,28 @@ against `acmekit`, a fictional SDK with hidden quirks (init first, lowercase ema
 timezones, retries, a Result wrapper); code is run against tests. Halfway through, the SDK moves to v2 and
 `init()` changes. First-try success, 3 task orders (seeds 0-2):
 
-| Agent | before the SDK change | after the change | total |
-|---|---|---|---|
-| no memory | 0% | 0% | 0% |
-| retrieval memory + worked examples | 46% | 8% | 27% |
-| neuromem reflex agent (`realtest/reflex.py`) | 44% | 49% | 46% |
+| Agent | first try, before the change | after the change | first try, total | final (after 1 retry) |
+|---|---|---|---|---|
+| no memory (seed 0) | 0% | 0% | 0% | 13% |
+| retrieval memory + worked examples | 46% | 8% | 27% | 60% |
+| neuromem reflex agent v1 (habits + verified-fix hints) | 44% | 49% | 47% | 62% |
+| + learned in-line rewrite rules | | | 45% | 66% |
+| **+ learning from partial progress (default)** | 53% | 44% | **50%** | **72%** |
+| + fixes must be seen twice before they are trusted | 53% | 35% | 44% | 70% |
 
-The reflex agent stores verified error -> fix pairs, shows them up front, turns repeated fixes into habits applied
-automatically, and gets feedback on every memory it used, so stale examples and habits are retired quickly.
-Before the change it is no better than retrieval; after the change it keeps working while retrieval keeps
-replaying outdated examples. Habits only form for whole-statement fixes (e.g. an init call); in-line fixes
-(`.value`, `email.strip().lower()`) are not learned yet. Results vary a lot between task orders.
+The reflex agent (`realtest/reflex.py`) stores verified error -> fix pairs and learned rewrite rules
+(`neuromem.rewrite`: `users.find(E) -> users.find(E.strip().lower())`, `cache.get(K) -> cache.get(K).value`),
+shows trusted fixes up front, turns repeated fixes into habits applied automatically, learns from retries that
+get past an error even if they still fail, and gets feedback on every memory it used, so stale examples and
+habits are retired quickly.
 
-`pytest tests`: 36 tests; they pass with every profile (`NEUROMEM_PROFILE=tiny|small|full pytest tests`).
+What holds up: every reflex variant beats plain retrieval memory by ~20 points on first-try success, and keeps
+working after the SDK change (retrieval drops to 8% because it keeps replaying outdated examples). What does
+not: the differences between reflex variants are within run-to-run noise (each change moves a task order by
+about +/-5 of 48), so this benchmark cannot rank them. A wrong fix learned from partial progress can mislead
+later tasks; the "seen twice" rule blocks that but did not score better here.
+
+`pytest tests`: 41 tests; they pass with every profile (`NEUROMEM_PROFILE=tiny|small|full pytest tests`).
 
 ## Limits
 
@@ -182,7 +191,7 @@ replaying outdated examples. Habits only form for whole-statement fixes (e.g. an
 - One process at a time; recall scans all memories (fine to ~10^5).
 - Jargon the embedding model doesn't know matches poorly unless you train a vocabulary for it.
 - The real-model test uses one fictional SDK and one 7B model; results vary a lot between task orders.
-- Reflex habits only learn whole-statement fixes, not edits inside a line.
+- Rewrite rules cover argument wrapping and result extension only; other edits are not generalised.
 - No real long-term usage data yet.
 
 ## Related work

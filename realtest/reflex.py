@@ -3,7 +3,7 @@
   habits   fixes that worked >= 2 times are applied to every new attempt before it runs (no LLM call)
   reflex   on a remembered kind of error, apply the remembered fix and re-run (no LLM call)
   retry    otherwise ask the LLM, telling it how this kind of error was fixed before
-  learn    every failing -> passing pair stores the error signature, the lines that fixed it, and in-line
+  learn    every failing -> passing pair (or failing -> failing further on: partial progress) stores the error signature, the lines that fixed it, and in-line
            rewrite rules (neuromem.rewrite) such as users.find(E) -> users.find(E.strip().lower())
   unlearn  a habit or fix whose own line causes an error gets negative feedback and is retired
 """
@@ -20,7 +20,8 @@ def added_lines(before, after):
     out = []
     for l in after.splitlines():
         t = l.strip()
-        if t and t not in b and not t.startswith(("def ", "#", "return", "import", "from ")) and t not in out:
+        if (t and t not in b and not t.startswith(("def ", "#", "return", "import", "from ")) and t not in out
+                and not t.endswith(":")):                       # control-flow fragments mean nothing out of context
             out.append(t)
     return out[:4]
 
@@ -73,6 +74,8 @@ def blames(error, lines):
                 return True
         elif callee(l).split(".")[-1] + "(" in error:
             return True
+        elif any(f"'{w}'" in error for w in re.findall(r"[A-Za-z_]\w{2,}", l)):
+            return True                                         # e.g. NameError: name 'project_id' is not defined
     return False
 
 
@@ -80,7 +83,9 @@ class ReflexMemory(NeuroMemory):
     pass
 
 
-def run_reflex(model, n, sequence, log=None, profile="full", hints=True, name="reflex"):
+def run_reflex(model, n, sequence, log=None, profile="full", hints=True, name="reflex", replicate=False):
+    """replicate=True: fixes learned from partial progress stay hidden until seen twice (safer, scored lower
+    here: 44% vs 50% first try over 3 seeds, within noise)."""
     import json
     import time
     mem = ReflexMemory(profile)
@@ -112,6 +117,7 @@ def run_reflex(model, n, sequence, log=None, profile="full", hints=True, name="r
             elif blames(err, applied):
                 b.feedback([hid], -1, now=mem.clock)
         stage, final_ok, first_err, fail_code, good_code = "first", ok1, err, code, code if ok1 else None
+        progress_code = None
         # reflex: a remembered fix for this kind of error, applied without asking the LLM
         if not final_ok:
             for fid, lines in b.fixes_for(err, now=mem.clock):
@@ -127,7 +133,7 @@ def run_reflex(model, n, sequence, log=None, profile="full", hints=True, name="r
                     b.feedback([fid], -1, now=mem.clock)
         # retry with the LLM, told how this kind of error was fixed before
         if not final_ok:
-            found = b.fixes_for(err, now=mem.clock) if hints else []
+            found = b.fixes_for(err, now=mem.clock, trusted_only=True) if hints else []
             extra = ("\nThis kind of error was fixed before by adding: " +
                      " ; ".join(" ; ".join(l) for _, l in found)) if found else ""
             msgs += [{"role": "assistant", "content": f"```python\n{code}\n```"},
@@ -136,13 +142,19 @@ def run_reflex(model, n, sequence, log=None, profile="full", hints=True, name="r
             ok2, err2 = run_code(code2, check, version)
             if ok2:
                 final_ok, stage, good_code = True, "retry", code2
+            elif (b.error_signature(err2) != b.error_signature(err)
+                  and not err2.startswith(("NameError", "SyntaxError", "IndentationError"))
+                  and not blames(err2, added_lines(code, code2))):
+                progress_code = code2                           # got further, and not by breaking the code
         # learn: the error and the lines that turned failing code into passing code
         lesson = ""
-        if good_code and not ok1:
+        fixed_code = good_code or progress_code                 # success, or partial progress past the error
+        if fixed_code and not ok1:
             mem.clock += 0.05
-            b.remember_fix(first_err, added_lines(fail_code, good_code), now=mem.clock)
-            for rule in rewrite.learn(fail_code, good_code):        # each in-line fix is its own memory
-                b.remember_fix(first_err, [rule], now=mem.clock)
+            verified = good_code is not None or not replicate      # optionally treat partial progress as tentative
+            b.remember_fix(first_err, added_lines(fail_code, fixed_code), now=mem.clock, verified=verified)
+            for rule in rewrite.learn(fail_code, fixed_code):       # each in-line fix is its own memory
+                b.remember_fix(first_err, [rule], now=mem.clock, verified=verified)
         if not ok1:
             msgs += [{"role": "user", "content": "Write the one rule about acmekit that would have prevented the first "
                                                  "error, as a concrete instruction including the exact code to write "
@@ -153,7 +165,7 @@ def run_reflex(model, n, sequence, log=None, profile="full", hints=True, name="r
             mem.store_example(task, good_code)
         rows.append({"condition": name, "seed": getattr(sequence, "seed", None), "i": i, "task": tname, "version": version, "first_try": ok1,
                      "after_retry": final_ok, "stage": stage, "error": first_err[:160], "lesson": lesson,
-                     "habits": [l for _, l in habit_ids], "secs": round(time.time() - t0, 1)})
+                     "habits": [l for _, l in habit_ids], "notes": notes, "code": raw, "secs": round(time.time() - t0, 1)})
         print(f"[{name}] {i:2} v{version} {tname:<18} first={'PASS' if ok1 else 'fail'} final={'PASS' if final_ok else 'fail'}"
               f" via={stage:<6} habits={len(habit_ids)}  {first_err[:60]}", flush=True)
         if log:

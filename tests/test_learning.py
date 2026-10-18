@@ -120,3 +120,14 @@ def test_fixes_become_habits_and_stale_habits_are_unlearned_quickly():
     b.feedback([hid], -1, now=2)
     b.feedback([hid], -1, now=2.1)                              # the world changed: two failures in a row
     assert b.habits() == []
+
+
+@needs_semantic
+def test_tentative_fix_is_hidden_until_seen_again():
+    b = Brain(":memory:")
+    err = "AssertionError: expected the string free, got Result(ok=True)"
+    b.remember_fix(err, ["x = sdk.cache.get(k).value"], now=0, verified=False)
+    assert b.known_fixes(now=1) == [] and b.fixes_for(err, now=1, trusted_only=True) == []
+    assert b.fixes_for(err, now=1)                              # still available to try (and test) automatically
+    b.remember_fix(err, ["x = sdk.cache.get(k).value"], now=2, verified=False)     # replicated
+    assert b.known_fixes(now=3) and b.fixes_for(err, now=3, trusted_only=True)

@@ -569,9 +569,10 @@ class Brain:
         line = re.sub(r"'[^']*'|\"[^\"]*\"", "<s>", line.strip())
         return re.sub(r"\b\d+(\.\d+)?\b", "<n>", " ".join(line.split()))
 
-    def remember_fix(self, error, fix_lines, now=None):
-        """Remember that `fix_lines` (verified: the code passed after adding them) fixed `error`. The same fix
-        written with different literal values counts as the same memory, so repeated fixes become habits."""
+    def remember_fix(self, error, fix_lines, now=None, verified=True):
+        """Remember that `fix_lines` fixed `error`. verified=True: the code then passed. verified=False: it only
+        got further (a different error), so the fix is tentative: it is not trusted (shown or made a habit) until
+        it is seen again. The same fix written with different literal values counts as the same memory."""
         now = _now() if now is None else now
         sig = self.error_signature(error)
         lines = [l.strip() for l in fix_lines if l.strip()]
@@ -587,7 +588,7 @@ class Brain:
             self.feedback([row[0]], 1, now=now)
             return out
         return self._store(text, layer="procedural", imp=0.6, now=now, task=sig, check_beliefs=False, source="fix",
-                           meta={"lines": lines, "helped": 1})
+                           meta={"lines": lines, "helped": 1.0 if verified else 0.5})
 
     def known_fixes(self, k=3, now=None):
         """The strongest verified fixes, for showing up front: [(error signature, lines)]."""
@@ -598,12 +599,13 @@ class Brain:
         def value(r):
             m = json.loads(r[2] or "{}")
             return R[self._pos(r[0])] * (1 + m.get("helped", 0) - m.get("misled", 0))
-        return [(r[1], json.loads(r[2])["lines"]) for r in sorted(rows, key=lambda r: -value(r))[:k]
+        trusted = [r for r in rows if json.loads(r[2] or "{}").get("helped", 0) >= 1.0]
+        return [(r[1], json.loads(r[2])["lines"]) for r in sorted(trusted, key=lambda r: -value(r))[:k]
                 if value(r) > 0]
 
-    def fixes_for(self, error, k=2, now=None):
+    def fixes_for(self, error, k=2, now=None, trusted_only=False):
         """Remembered fixes for this kind of error, best first: [(id, lines)]. Exact signature first, then
-        similar errors."""
+        similar errors. trusted_only: skip tentative fixes (use for anything shown to a model)."""
         now = _now() if now is None else now
         sig = self.error_signature(error)
         rows = self.db.execute("SELECT id, task, meta FROM memories WHERE source = 'fix' AND superseded_by IS NULL"
@@ -615,9 +617,10 @@ class Brain:
         sim = self._sem(self._cos(v, pos)) if v is not None else np.zeros(len(rows))
         exact = np.array([r[1] == sig for r in rows], float)
         R = self._strength(now)[pos]
-        score = (exact * 2 + sim) * (0.4 + 0.6 * R)
+        trusted = np.array([json.loads(r[2] or "{}").get("helped", 0) >= 1.0 for r in rows])
+        score = (exact * 2 + sim) * (0.4 + 0.6 * R) * (trusted if trusted_only else 1)
         return [(rows[i][0], json.loads(rows[i][2])["lines"]) for i in np.argsort(-score)[:k]
-                if exact[i] or sim[i] >= 1.0]
+                if score[i] > 0 and (exact[i] or sim[i] >= 1.0)]
 
     def habits(self, min_helped=1.5):
         """Fixes that have worked repeatedly and never been retired: apply them proactively. [(id, lines)]"""
