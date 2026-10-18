@@ -3,11 +3,13 @@
   habits   fixes that worked >= 2 times are applied to every new attempt before it runs (no LLM call)
   reflex   on a remembered kind of error, apply the remembered fix and re-run (no LLM call)
   retry    otherwise ask the LLM, telling it how this kind of error was fixed before
-  learn    every failing -> passing pair stores the error signature and the lines that fixed it
+  learn    every failing -> passing pair stores the error signature, the lines that fixed it, and in-line
+           rewrite rules (neuromem.rewrite) such as users.find(E) -> users.find(E.strip().lower())
   unlearn  a habit or fix whose own line causes an error gets negative feedback and is retired
 """
 import re
 
+from neuromem import rewrite
 from harness import NeuroMemory, extract_code, fmt_notes, llm, prompt, run_code, SYSTEM
 
 CALL = re.compile(r"^[A-Za-z_][\w.]*\(.*\)$")
@@ -24,7 +26,8 @@ def added_lines(before, after):
 
 
 def callee(line):
-    return line.split("(")[0]
+    m = rewrite.RULE.match(line.strip())
+    return m.group(1) if m else line.split("(")[0]
 
 
 def apply_lines(code, lines, replace=True):
@@ -32,8 +35,13 @@ def apply_lines(code, lines, replace=True):
     missing call -> insert at the top of the first function; present but written differently -> replace it
     (only when replace=True). Returns (new_code, applied_lines)."""
     from neuromem import Brain
-    src, applied = code.splitlines(), []
-    for fix in [l for l in lines if CALL.match(l)]:
+    applied = []
+    for rule in [l for l in lines if rewrite.is_rule(l)]:          # learned in-line rewrites
+        code, changed = rewrite.apply(code, rule)
+        if changed:
+            applied.append(rule)
+    src = code.splitlines()
+    for fix in [l for l in lines if CALL.match(l) and not rewrite.is_rule(l)]:
         c = callee(fix) + "("
         idx = [i for i, l in enumerate(src) if l.strip().startswith(c)]
         if idx:
@@ -55,8 +63,17 @@ def apply_lines(code, lines, replace=True):
 
 
 def blames(error, lines):
-    """Did one of these lines cause the error? (its callee name appears in the error message)"""
-    return any(callee(l).split(".")[-1] + "(" in error for l in lines)
+    """Did one of these lines cause the error? A statement is blamed when the error names its function; a
+    rewrite rule when the error names something the rule added (e.g. "no attribute 'value'")."""
+    for l in lines:
+        m = rewrite.RULE.match(l.strip())
+        if m:
+            added = re.findall(r"[A-Za-z_]\w{2,}", m.group(4).replace("{0}", ""))
+            if any(f"'{w}'" in error or f"{w}(" in error for w in added):
+                return True
+        elif callee(l).split(".")[-1] + "(" in error:
+            return True
+    return False
 
 
 class ReflexMemory(NeuroMemory):
@@ -124,6 +141,8 @@ def run_reflex(model, n, sequence, log=None, profile="full", hints=True, name="r
         if good_code and not ok1:
             mem.clock += 0.05
             b.remember_fix(first_err, added_lines(fail_code, good_code), now=mem.clock)
+            for rule in rewrite.learn(fail_code, good_code):        # each in-line fix is its own memory
+                b.remember_fix(first_err, [rule], now=mem.clock)
         if not ok1:
             msgs += [{"role": "user", "content": "Write the one rule about acmekit that would have prevented the first "
                                                  "error, as a concrete instruction including the exact code to write "
