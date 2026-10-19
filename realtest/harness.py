@@ -158,8 +158,12 @@ class NeuroMemory:
 
 
 def run(model, n, condition, profile="full", log=None, seed=0):
-    mem = {"none": None, "retrieval": RetrievalMemory(make_embedder(profile)),
-           "neuromem": NeuroMemory(profile)}[condition]
+    if condition == "mem0":
+        from mem0_agent import Mem0Memory
+        mem = Mem0Memory(model)
+    else:
+        mem = {"none": None, "retrieval": RetrievalMemory(make_embedder(profile)),
+               "neuromem": NeuroMemory(profile)}[condition]
     rows = []
     for i, (name, task, check) in enumerate(sequence(seed=seed, n=n)):
         version = 1 if i < n // 2 else 2
