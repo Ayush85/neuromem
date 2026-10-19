@@ -21,8 +21,23 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 sys.path.insert(0, HERE)
-from acmekit import API_DOC                  # noqa: E402
-from tasks import PREAMBLE, sequence         # noqa: E402
+import importlib                             # noqa: E402
+import random                                # noqa: E402
+
+SDK = os.environ.get("REALTEST_SDK", "acmekit")      # acmekit | paykit
+API_DOC = importlib.import_module(SDK).API_DOC
+_tasks = importlib.import_module("tasks" if SDK == "acmekit" else f"tasks_{SDK}")
+PREAMBLE, TASKS = _tasks.PREAMBLE, _tasks.TASKS
+
+
+def sequence(seed=0, n=24):
+    """Passes over the SDK's task kinds, each in a fresh shuffled order."""
+    r, out = random.Random(seed), []
+    while len(out) < n:
+        p = TASKS[:]
+        r.shuffle(p)
+        out += p
+    return out[:n]
 
 from neuromem import Brain                   # noqa: E402
 from neuromem.embed import make_embedder     # noqa: E402
@@ -49,7 +64,7 @@ def run_code(code, check, version):
         f.write(src)
     try:
         p = subprocess.run([sys.executable, f.name], capture_output=True, text=True, timeout=20,
-                           env={**os.environ, "PYTHONPATH": HERE, "ACMEKIT_VERSION": str(version)})
+                           env={**os.environ, "PYTHONPATH": HERE, f"{SDK.upper()}_VERSION": str(version)})
         if "PASS" in p.stdout:
             return True, ""
         err = (p.stderr.strip().splitlines() or ["no output"])[-1]
@@ -60,15 +75,20 @@ def run_code(code, check, version):
         os.unlink(f.name)
 
 
-SYSTEM = ("You write Python code that uses our internal SDK `acmekit` (already imported as `acmekit`; datetime, "
-          "timedelta and timezone are imported too). Write only the requested function plus any helpers, in one "
-          "```python block, with no explanation.")
+SYSTEM = {
+    "acmekit": ("You write Python code that uses our internal SDK `acmekit` (already imported as `acmekit`; datetime, "
+                "timedelta and timezone are imported too). Write only the requested function plus any helpers, in "
+                "one ```python block, with no explanation."),
+    "paykit": ("You write Python code that uses our internal SDK `paykit` (already imported as `paykit`; Decimal is "
+               "imported too). Write only the requested function plus any helpers, in one ```python block, with "
+               "no explanation."),
+}[SDK]
 
 
 def prompt(task, version, notes):
     p = API_DOC[version] + "\n\n"
     if notes:
-        p += ("IMPORTANT - rules learned from earlier failures with acmekit. Follow every one of them:\n"
+        p += (f"IMPORTANT - rules learned from earlier failures with {SDK}. Follow every one of them:\n"
               + notes + "\n\n")
     return p + "Task: " + task
 
@@ -163,9 +183,9 @@ def run(model, n, condition, profile="full", log=None, seed=0):
         lesson = ""
         if mem is not None and not ok1:
             msgs += [{"role": "assistant", "content": reply},
-                     {"role": "user", "content": "Write the one rule about acmekit that would have prevented the first "
+                     {"role": "user", "content": f"Write the one rule about {SDK} that would have prevented the first "
                                                  "error, as a concrete instruction including the exact code to write "
-                                                 "(not specific to this task). One sentence starting with 'acmekit:'."}]
+                                                 f"(not specific to this task). One sentence starting with '{SDK}:'."}]
             lesson = llm(model, msgs, max_tokens=80).strip().splitlines()[0][:300]
             mem.store(task, lesson, ok2)
         if mem is not None and code_ok:
@@ -190,7 +210,7 @@ if __name__ == "__main__":
     ap.add_argument("--seed", type=int, default=0)
     a = ap.parse_args()
     model, n = a.model, a.n
-    out = os.path.join(HERE, f"results_{model.replace(':', '_')}.jsonl")
+    out = os.path.join(HERE, f"results_{model.replace(':', '_')}" + ("" if SDK == "acmekit" else f"_{SDK}") + ".jsonl")
     with open(out, "a") as log:
         summary = {}
         for c in a.conditions:

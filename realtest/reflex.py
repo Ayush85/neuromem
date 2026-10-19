@@ -10,7 +10,7 @@
 import re
 
 from neuromem import rewrite
-from harness import NeuroMemory, extract_code, fmt_notes, llm, prompt, run_code, SYSTEM
+from harness import SDK, NeuroMemory, extract_code, fmt_notes, llm, prompt, run_code, SYSTEM
 
 CALL = re.compile(r"^[A-Za-z_][\w.]*\(.*\)$")
 
@@ -156,9 +156,9 @@ def run_reflex(model, n, sequence, log=None, profile="full", hints=True, name="r
             for rule in rewrite.learn(fail_code, fixed_code):       # each in-line fix is its own memory
                 b.remember_fix(first_err, [rule], now=mem.clock, verified=verified)
         if not ok1:
-            msgs += [{"role": "user", "content": "Write the one rule about acmekit that would have prevented the first "
+            msgs += [{"role": "user", "content": f"Write the one rule about {SDK} that would have prevented the first "
                                                  "error, as a concrete instruction including the exact code to write "
-                                                 "(not specific to this task). One sentence starting with 'acmekit:'."}]
+                                                 f"(not specific to this task). One sentence starting with '{SDK}:'."}]
             lesson = llm(model, msgs, max_tokens=80).strip().splitlines()[0][:300]
             mem.store(task, lesson, final_ok)
         if good_code:
