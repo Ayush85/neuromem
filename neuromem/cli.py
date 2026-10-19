@@ -55,8 +55,23 @@ def main(argv=None):
     tv.add_argument("--out", required=True)
     sub.add_parser("sleep", help="consolidate, forget to budget, prune links")
     sub.add_parser("stats")
+    sub.add_parser("usage-report", help="summarise real use recorded by the MCP server")
     args = p.parse_args(argv)
 
+    if args.cmd == "usage-report":
+        from collections import Counter
+        from .mcp_server import usage_path
+        rows = [json.loads(l) for l in open(usage_path())] if os.path.exists(usage_path()) else []
+        by_tool = Counter(r["tool"] for r in rows)
+        recalls = [r for r in rows if r["tool"] in ("recall", "examples", "fixes_for", "advise", "prepare")]
+        fb = [r for r in rows if r["tool"] == "feedback"]
+        out = {"calls": len(rows), "projects": dict(Counter(r["project"] for r in rows)), "by_tool": dict(by_tool),
+               "lookups_with_results": f"{sum(r['results'] > 0 for r in recalls)}/{len(recalls)}",
+               "feedback_helped": sum(r["args"].get("reward", 0) > 0 for r in fb),
+               "feedback_misled": sum(r["args"].get("reward", 0) < 0 for r in fb),
+               "days": round((rows[-1]["t"] - rows[0]["t"]) / 86400, 1) if rows else 0}
+        print(json.dumps(out, indent=2))
+        return 0
     if args.cmd == "train-vocab":
         from .embed import make_embedder
         from .vocab import train_vocab
